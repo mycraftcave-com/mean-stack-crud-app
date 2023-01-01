@@ -1,0 +1,71 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish to S3
+        uses: aws-actions/upload-artifact@v1
+        with:
+          bucket: my-s3-bucket
+          key: my-application.zip
+          path: build.zip
+          region: us-east-1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+
+    steps:
+      - name: Get latest AMI
+        id: get-ami
+        uses: aws-actions/amazon-ecs-get-ami@v1
+        with:
+          region: us-east-1
+
+      - name: Create new launch configuration
+        id: create-lc
+        uses: aws-actions/amazon-ecs-create-launch-configuration@v1
+        with:
+          launch-configuration-name: my-launch-config
+          image-id: ${{ steps.get-ami.outputs.image-id }}
+          instance-type: t2.micro
+          key-name: my-key-pair
+          security-groups: sg-12345678
+          user-data: |
+            #!/bin/bash
+            apt-get update
+            apt-get install -y build-essential nodejs
+            npm install -g express
+            npm install -g angular
+            # download and unzip the application code from S3
+            wget https://s3.amazonaws.com/my-s3-bucket/my-application.zip
+            unzip my-application.zip
+            rm my-application.zip
+            # start the application
+            npm start
+
+      - name: Update Auto Scaling group
+        uses: aws-actions/amazon-ecs-update-service@v1
+        with:
+          launch-configuration-name: ${{ steps.create-lc.outputs.launch-configuration-name }}
+          auto-scaling-group-name: my-auto-scaling-group
+          region: us-east-1
